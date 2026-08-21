@@ -1,0 +1,25 @@
+model_id: qwen3-vl-8b-instruct
+hf_checkpoint: Qwen/Qwen3-VL-8B-Instruct
+revision: 0c351dd01ed87e9c1b53cbc748cba10e6187ff3b
+access_date: "2026-07-28"
+serving_backend: hf-causal-multimodal
+venv: multimodal
+protocol: loglikelihood
+dtype: bfloat16
+quantization: none
+apply_chat_template: true
+batch_size: 6
+generation_config:
+  temperature: 0.0
+  do_sample: false
+num_fewshot: 5
+tasks:
+  - milu
+notes: >
+  Standard 5-shot loglikelihood protocol; hf-causal-multimodal backend (qwen3_vl
+  multimodal architecture, text-only use here). `batch_size: 6` fixed manually --
+  this architecture's auto-batch-size detection silently never fires on this
+  backend. No library patch was actually needed: vLLM was tried first (native
+  Qwen3VLForConditionalGeneration support) but would have required patching a
+  real Qwen3VLTextConfig/vLLM 0.11.0 incompatibility, so this project used the
+  already-working, unpatched hf-causal-multimodal path instead.

@@ -1,0 +1,20 @@
+model_id: qwen2.5-7b-instruct
+hf_checkpoint: Qwen/Qwen2.5-7B-Instruct
+revision: a09a35458c702b33eeacc393d103063234e8bc28
+access_date: "2026-07-28"
+serving_backend: hf
+venv: default
+protocol: loglikelihood
+dtype: bfloat16
+quantization: none
+apply_chat_template: true
+generation_config:
+  temperature: 0.0
+  do_sample: false
+num_fewshot: 5
+tasks:
+  - milu
+notes: >
+  Standard 5-shot loglikelihood protocol; plain CausalLM via the `hf` backend, no
+  multimodal/patch concerns. Substituted for the original Llama 3.1 8B slot (that
+  checkpoint's license was never accepted for this project's HF account).

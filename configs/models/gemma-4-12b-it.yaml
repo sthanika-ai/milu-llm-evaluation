@@ -1,0 +1,23 @@
+model_id: gemma-4-12b-it
+hf_checkpoint: google/gemma-4-12B-it
+revision: 707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7
+access_date: "2026-07-28"
+serving_backend: hf-causal-multimodal
+venv: multimodal
+protocol: loglikelihood
+dtype: bfloat16
+quantization: none
+apply_chat_template: true
+batch_size: 8
+generation_config:
+  temperature: 0.0
+  do_sample: false
+num_fewshot: 5
+tasks:
+  - milu
+notes: >
+  Standard 5-shot loglikelihood protocol (not a hybrid-thinking model). Uses the
+  `hf-causal-multimodal` backend ("gemma4_unified" any-to-any architecture,
+  text-only use here). No library patch needed. `batch_size: 8` chosen after an
+  empirical sweep found the full run OOMs at 16/32 on longer-context languages
+  despite a short-context smoke test suggesting otherwise.

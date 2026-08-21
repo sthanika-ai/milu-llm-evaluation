@@ -1,0 +1,21 @@
+[project]
+name = "milu-llm-evaluation"
+version = "0.1.0"
+description = "A reproducible pipeline and results for evaluating LLMs on the MILU Indic-language benchmark"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+
+# This project is not distributed as an installable package -- it's a research/evaluation
+# repo run in place (`python -m pipeline.run ...`) against one of the venvs described in
+# requirements/README.md. No [build-system]/dependencies section is declared here; the real,
+# environment-specific dependency lists live in requirements.lock.txt and requirements/.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.bandit]
+# B101 (assert-used) fires on every `assert` in tests/ -- that's pytest's normal
+# assertion mechanism, not a production security control, so it's excluded here
+# rather than fixed file-by-file.
+exclude_dirs = ["tests"]

@@ -1,0 +1,39 @@
+model_id: mistral-small-3.1-24b
+hf_checkpoint: mistralai/Mistral-Small-3.1-24B-Instruct-2503
+revision: 68faf511d618ef198fef186659617cfd2eb8e33a
+access_date: "2026-07-28"
+serving_backend: vllm
+venv: vllm2
+protocol: generate_until
+dtype: bfloat16
+quantization: none
+tokenizer_mode: mistral
+apply_chat_template: true
+generation_config:
+  temperature: 0.0
+  do_sample: false
+  max_gen_toks: 256
+num_fewshot: 0
+max_model_len: 8192
+max_num_seqs: 32
+gpu_memory_utilization: 0.85
+tasks:
+  - milu_api
+notes: >
+  Generative (0-shot, JSON-answer) protocol, NOT this roster's standard 5-shot
+  loglikelihood -- this checkpoint's tokenizer (`tokenizer_mode: mistral`) cannot
+  round-trip through the harness's string-render-then-re-tokenize loglikelihood
+  path (confirmed: decoding then re-encoding a chat-templated string does not
+  reproduce the original special-token sequence), a hard architectural mismatch
+  that affects any harness using this tokenizer mode, not just this project.
+  Generative scoring avoids the round-trip entirely.
+
+  Two disclosed patches to this project's vLLM install (not vendor/MILU):
+  (1) `model_executor/models/llama.py`'s `rope_theta` lookup falls back to a
+  nested `rope_parameters` dict when the flat attribute is missing
+  (transformers>=5.x moved it there for this architecture and Phi-4's) --
+  without this fix, RoPE silently uses the wrong base with no error. (2) vLLM's
+  memory-profiling step now skips generating dummy multimodal input
+  (`skip_mm_profiling`/`limit_mm_per_prompt`) for every vllm-backed model in this
+  pipeline, since Mistral's natively-multimodal architecture otherwise crashes
+  on it even though MILU never sends images.

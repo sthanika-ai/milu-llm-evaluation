@@ -1,0 +1,38 @@
+model_id: gpt-oss-20b-thinkmode-vllm
+hf_checkpoint: openai/gpt-oss-20b
+revision: 6cee5e81ee83917806bbde320786a8fb61efebee
+access_date: "2026-08-03"
+serving_backend: vllm
+venv: vllm2
+protocol: generate_until
+dtype: bfloat16
+quantization: mxfp4
+already_quantized: true
+apply_chat_template: true
+num_fewshot: 0
+max_model_len: 8192
+max_num_seqs: 32
+gpu_memory_utilization: 0.85
+generation_config:
+  temperature: 0.0
+  do_sample: false
+  max_gen_toks: 3072
+tasks:
+  - milu_api_nostop
+notes: >
+  Generative (0-shot), thinking allowed (OpenAI Harmony format's `analysis`
+  channel) -- vLLM backend for throughput over the plain `hf` path (an
+  unpatched HF-backend run works but projects to ~9 days at full scale vs. ~1
+  day on vLLM). `milu_api_nostop` (part of patches/) avoids cutting generation
+  off mid-reasoning, since Harmony's analysis channel often contains a blank
+  line before the final answer.
+
+  One disclosed patch to this project's vLLM install (not vendor/MILU):
+  `vllm/model_executor/models/gpt_oss.py`'s attention init accessed
+  `config.rope_theta` directly -- transformers>=5.x moved it into a nested
+  `rope_parameters` dict for this checkpoint, so this needed the same fallback
+  pattern already applied to vLLM's `llama.py` for Llama 4 Scout/Mistral/Phi-4
+  (see those configs' notes). mxfp4 quantization needs no patch on this vLLM
+  path (a separate, torch-version-independent implementation from
+  transformers' own Mxfp4Config, which does need a workaround on the `hf`
+  backend -- see gpt-oss-20b.yaml, not in this curated set).

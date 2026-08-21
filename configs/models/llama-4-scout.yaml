@@ -1,0 +1,33 @@
+model_id: llama-4-scout
+hf_checkpoint: RedHatAI/Llama-4-Scout-17B-16E-Instruct-quantized.w4a16
+revision: e8b8a7ca92e62e476ae2e7d3169bf11c7caba485
+access_date: "2026-08-01"
+serving_backend: vllm
+venv: vllm2
+protocol: loglikelihood
+dtype: bfloat16
+quantization: w4a16
+already_quantized: true
+apply_chat_template: true
+num_fewshot: 5
+max_model_len: 5120
+max_num_seqs: 8
+gpu_memory_utilization: 0.85
+tasks:
+  - milu
+notes: >
+  Standard 5-shot loglikelihood protocol (17B active/109B total MoE, native
+  long-context) -- not a hybrid-thinking model. `max_model_len: 5120` is set
+  uniformly across all 11 languages for this published config (Odia's real
+  outlier prompt length needs it; the other 10 stay safely under it too, at
+  some cost in KV-cache concurrency vs. splitting Odia into its own run -- see
+  configs/README.md for why the historical run was split that way instead).
+
+  Three disclosed patches to this project's vLLM install (not vendor/MILU),
+  all needed just to load this checkpoint's compressed-tensors INT4 quantized
+  variant at all under vLLM 0.11.0/transformers 5.14.1: (1) a config field
+  (`attn_temperature_tuning`) needed an int->bool coercion for transformers
+  5.x's stricter validation; (2) a removed tokenizer-caching attribute
+  (`all_special_tokens_extended`) needed a `getattr` fallback; (3) `rope_theta`
+  moved into a nested `rope_parameters` dict, same fallback pattern as
+  Mistral/Phi-4/gpt-oss's version of this bug (see those configs' notes).

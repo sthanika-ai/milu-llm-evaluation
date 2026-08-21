@@ -1,0 +1,5 @@
+dataset_name: Punjabi
+include: _default_template_api.yaml
+tag: milu-api-core
+task: milu_Punjabi_api
+task_alias: milu_Punjabi_api

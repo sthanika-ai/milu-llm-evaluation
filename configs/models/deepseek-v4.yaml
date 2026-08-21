@@ -1,0 +1,33 @@
+model_id: deepseek-v4-flash
+serving_backend: local-chat-completions
+api_endpoint: deepseek-v4-flash
+base_url: https://api.deepseek.com/v1/chat/completions
+api_key_env_var: DEEPSEEK_API_KEY
+access_date: "2026-08-01"
+protocol: generate_until
+apply_chat_template: true
+num_fewshot: 0
+num_concurrent: 4
+max_retries: 8
+timeout_seconds: 600
+generation_config:
+  temperature: 0.0
+  max_gen_toks: 256
+  disable_thinking: true
+tasks:
+  - milu_api
+notes: >
+  Generative (0-shot, JSON-answer), thinking explicitly disabled
+  (`disable_thinking: true`) -- matches MILU's own described protocol for API
+  models (arXiv:2411.02538 Sec 4: API models can't expose prompt loglikelihoods,
+  so they're evaluated generatively). Thinking is off because DeepSeek V4-Flash
+  reasons by default and its reasoning tokens count against the same completion
+  budget as the final answer, which silently truncated every item under the
+  default token budget with thinking left on.
+
+  Two disclosed patches to vendor/MILU (see patches/), both in
+  `api_models.py`/`openai_completions.py`: (1) per-task exception isolation in
+  the concurrent-request gather (a single exhausted-retries chunk used to
+  cancel every other in-flight chunk, losing already-completed, already-paid
+  results); (2) real per-request token usage logging, so cost is computed from
+  actual billed tokens (`results_db`'s `real_cost_usd`), not just estimated.

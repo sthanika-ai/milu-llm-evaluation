@@ -1,0 +1,36 @@
+model_id: sarvam-m-thinkmode-0shot-json
+hf_checkpoint: sarvamai/sarvam-m
+revision: 01534a53c46f2788e392dbb3d994e0fa8f04d3fd
+access_date: "2026-07-31"
+serving_backend: vllm
+venv: vllm
+protocol: generate_until
+dtype: bfloat16
+quantization: none
+apply_chat_template: true
+batch_size: auto
+generation_config:
+  temperature: 0.0
+  max_new_tokens: 1536
+num_fewshot: 0
+tasks:
+  - milu_English
+notes: >
+  Generative (0-shot, JSON-answer, thinking allowed) protocol, not this roster's
+  standard 5-shot loglikelihood -- sarvam-m.yaml's loglikelihood run silently
+  scored "jump from a bare, unclosed `<think>` tag straight to an answer," a
+  distribution this reasoning-tuned model was never trained to produce. This
+  config lets it generate its reasoning for real instead.
+
+  No patch to vendor/MILU or vLLM itself -- reuses this project's own
+  utils_milu_api.py/_default_template_api.yaml task templates (already part of
+  patches/, built for frontier-API cost estimation) with a larger token budget
+  and no stop-sequence, plus last-match (not first-match) answer extraction.
+  Does not go through pipeline/run.py's standard dispatcher -- run instead via
+  internal tooling (not included in this repository) that drives vLLM directly
+  with its own checkpoint/revision/language flags.
+
+  Scope, stated plainly: this committed config is a 200-item English-only
+  investigation, not the full 11-language production run (82.44% overall) --
+  that run's exact invocation isn't separately recorded as a committed config;
+  see configs/README.md.

@@ -1,0 +1,32 @@
+model_id: phi-4-vllm
+hf_checkpoint: microsoft/phi-4
+revision: 2db69c1c3e91a05d2c64a3185acfbaf36f744e25
+access_date: "2026-08-04"
+serving_backend: vllm
+venv: vllm2
+protocol: loglikelihood
+dtype: bfloat16
+quantization: none
+apply_chat_template: true
+num_fewshot: 5
+max_model_len: 8192
+max_num_seqs: 32
+gpu_memory_utilization: 0.85
+generation_config:
+  temperature: 0.0
+  do_sample: false
+tasks:
+  - milu
+notes: >
+  Standard 5-shot loglikelihood protocol -- confirmed not a hybrid-thinking model
+  (plain ChatML-style template, no `<think>` tag or reasoning field, unlike
+  sarvam-m/qwen3.6-27b/gpt-oss-20b). vLLM backend for throughput over the plain
+  `hf` path (see phi-4.yaml).
+
+  One disclosed patch to this project's vLLM install (not vendor/MILU): vLLM
+  registers Phi3ForCausalLM as a subclass of LlamaForCausalLM, whose `rope_theta`
+  lookup silently returned the wrong default (10000 instead of the real 250000,
+  no error) because transformers>=5.x moved it into a nested `rope_parameters`
+  dict. Fixed generally in vLLM's own `llama.py`, shared by Mistral's text decoder
+  too -- see mistral-small-3.1-24b.yaml's notes; this config is where the bug was
+  first found.
