@@ -1,0 +1,772 @@
+diff --git a/lm_eval/api/model.py b/lm_eval/api/model.py
+index 765fc01..629949f 100644
+--- a/lm_eval/api/model.py
++++ b/lm_eval/api/model.py
+@@ -297,7 +297,22 @@ class CachingLM:
+ 
+                 # caching
+                 hsh = hash_args(attr, req.args)
+-                self.dbdict[hsh] = r
++                if r:
++                    # "" is api_models.py's own placeholder for a request that
++                    # exhausted max_retries (rate-limited, timed out, etc) --
++                    # not a real answer. Caching it anyway defeats --use_cache's
++                    # own documented purpose ("a re-run skips every already-
++                    # completed request instead of repeating the spend"): a
++                    # rerun meant to retry exactly these failures would instead
++                    # replay the same empty placeholder forever, since a
++                    # rate-limit burst is precisely the kind of failure a rerun
++                    # is supposed to recover from. Confirmed for real:
++                    # sarvam-105b's first full-Telugu run got rate-limited on
++                    # 6,677/7,304 items; rerunning with a fixed request pace
++                    # still showed 100% cache hits and zero new API calls until
++                    # this fix, silently reproducing the same 91% malformed
++                    # rate from cache instead of actually retrying anything.
++                    self.dbdict[hsh] = r
+             self.dbdict.commit()
+ 
+             return res
+@@ -418,6 +433,17 @@ class TemplateLM(LM):
+         if self.tokenizer is None:
+             return ""
+ 
++        if not hasattr(self.tokenizer, "chat_template"):
++            # e.g. vLLM's MistralTokenizer wrapper (tokenizer_mode="mistral") --
++            # not a real HF PreTrainedTokenizer, has no chat_template/
++            # default_chat_template attributes at all. It handles chat templating
++            # internally via its own apply_chat_template() (see
++            # VLLM.apply_chat_template()'s override, which delegates straight to
++            # the tokenizer and works fine) -- this method only produces a
++            # reproducibility string for logging, so treat it the same as the
++            # "no tokenizer" case just above rather than crashing.
++            return ""
++
+         if chat_template is False or chat_template is None:
+             eval_logger.warning(
+                 "model.chat_template was called with the chat_template set to False or None. "
+diff --git a/lm_eval/models/__init__.py b/lm_eval/models/__init__.py
+index 553be3a..22fd609 100644
+--- a/lm_eval/models/__init__.py
++++ b/lm_eval/models/__init__.py
+@@ -3,6 +3,7 @@ from . import (
+     api_models,
+     dummy,
+     gguf,
++    hf_causal_multimodal,
+     hf_vlms,
+     huggingface,
+     mamba_lm,
+diff --git a/lm_eval/models/api_models.py b/lm_eval/models/api_models.py
+index 7098893..679e915 100644
+--- a/lm_eval/models/api_models.py
++++ b/lm_eval/models/api_models.py
+@@ -21,7 +21,7 @@ from typing import (
+ 
+ try:
+     import requests
+-    from aiohttp import ClientSession, TCPConnector
++    from aiohttp import ClientSession, ClientTimeout, TCPConnector
+     from tenacity import RetryError, retry, stop_after_attempt, wait_exponential
+     from tqdm import tqdm
+     from tqdm.asyncio import tqdm_asyncio
+@@ -68,6 +68,8 @@ class TemplateAPI(TemplateLM):
+         # number of concurrent requests. More useful if not batching
+         num_concurrent: int = 1,
+         max_retries: int = 3,
++        timeout: int = 300,
++        request_delay: float = 0.0,
+         max_gen_toks: int = 256,
+         batch_size: Union[str, int] = 1,
+         seed: int = 1234,
+@@ -117,6 +119,8 @@ class TemplateAPI(TemplateLM):
+         self.custom_prefix_token_id = custom_prefix_token_id
+         self.tokenized_requests = tokenized_requests
+         self.max_retries = int(max_retries)
++        self.timeout = int(timeout)
++        self.request_delay = float(request_delay)
+ 
+         eval_logger.info(f"Using tokenizer {self.tokenizer_backend}")
+         if self.tokenizer_backend is None:
+@@ -432,33 +436,107 @@ class TemplateAPI(TemplateLM):
+         **kwargs,
+     ) -> Union[List[List[str]], List[List[Tuple[float, bool]]]]:
+         ctxlens = ctxlens if ctxlens else [None] * len(requests)
+-        conn = TCPConnector(limit=self._concurrent)
+-        async with ClientSession(connector=conn) as session:
++        # force_close=True: the real bug behind two separate deepseek-v4-flash
++        # failures (~15min/10,462-calls-in crash, then a retry that still hit
++        # 74.7% then 67.6% "TimeoutError" malformed rates even after lowering
++        # num_concurrent 10->4 and raising the timeout -- concurrency/timeout
++        # tuning barely moved the number, ruling out both "overwhelming a rate
++        # limit" and "requests genuinely running slow": a direct sequential test
++        # against the real API from this same box succeeded in under 1.2s on
++        # every call, and the failure severity dropped monotonically over the
++        # course of each run (near-100% failure on the first language processed,
++        # 0% on the last) -- the signature of a stale pooled connection being
++        # reused after the server already closed it server-side, not a
++        # rate/timeout problem. Without force_close, aiohttp's default keep-alive
++        # reuses TCPConnector connections across requests; if the server's own
++        # idle-connection timeout is shorter than aiohttp's client-side keepalive
++        # window, a reused connection can silently be half-dead, and a request
++        # sent on it hangs until the ClientTimeout below kills it -- explains the
++        # "TimeoutError: " (empty message, not a clean connection-reset) and the
++        # gradual improvement over a run (each failure forces a fresh connection
++        # on retry, so the pool slowly self-heals). force_close=True closes the
++        # connection after every single request -- a fresh TCP+TLS handshake per
++        # call, ~small latency cost the direct test showed is negligible (<1.2s),
++        # eliminating the stale-reuse race entirely instead of tuning around it.
++        conn = TCPConnector(limit=self._concurrent, force_close=True, enable_cleanup_closed=True)
++        # Explicit, generous timeout -- still worth keeping even with force_close,
++        # as a backstop for genuinely slow responses (large contexts, real server
++        # load) rather than the primary fix for the stale-connection failures above.
++        timeout = ClientTimeout(total=self.timeout, sock_connect=min(120, self.timeout))
++        async with ClientSession(connector=conn, timeout=timeout) as session:
+             retry_: Callable[..., Awaitable[Any]] = retry(
+                 stop=stop_after_attempt(self.max_retries),
+                 wait=wait_exponential(multiplier=0.5, min=1, max=10),
+                 reraise=True,
+             )(self.amodel_call)
+             # Create tasks for each batch of request
+-            tasks = [
+-                asyncio.create_task(
+-                    retry_(
+-                        session=session,
+-                        messages=message,
+-                        cache_keys=cache_key,
+-                        generate=generate,
+-                        ctxlens=ctxlen,
+-                        **kwargs,
+-                    )
+-                )
+-                for message, cache_key, ctxlen in zip(
+-                    chunks(requests, n=self._batch_size),
++            request_chunks = list(chunks(requests, n=self._batch_size))
++            # request_delay: TCPConnector(limit=self._concurrent) caps how many
++            # requests are SIMULTANEOUSLY in flight, but every task below is
++            # still created (and its HTTP request dispatched) in one synchronous
++            # burst -- as soon as any one of the num_concurrent slots frees up,
++            # the next request fires immediately. Real deepseek-v4-flash runs at
++            # num_concurrent=4-10 hit a severe, reproducible failure pattern
++            # (malformed rate near 100% on the first-processed language, falling
++            # to 0% on the last) that persisted even after ruling out stale
++            # connection reuse (force_close=True) and confirming the API itself
++            # is fine (a plain sequential test succeeded instantly on every
++            # call) -- consistent with an undocumented server-side throttle on
++            # sustained request RATE, not concurrent connection count. Spacing
++            # out task creation (not just capping how many run at once) directly
++            # targets that, independent of exactly which theory is right.
++            # request_delay=0 (default) preserves the original instant-burst
++            # behavior for any model that doesn't need this.
++            tasks = []
++            for i, (message, cache_key, ctxlen) in enumerate(
++                zip(
++                    request_chunks,
+                     chunks(cache_keys, n=self._batch_size),
+                     chunks(ctxlens, n=self._batch_size),
+                 )
+-            ]
++            ):
++                if i > 0 and self.request_delay > 0:
++                    await asyncio.sleep(self.request_delay)
++                tasks.append(
++                    asyncio.create_task(
++                        retry_(
++                            session=session,
++                            messages=message,
++                            cache_keys=cache_key,
++                            generate=generate,
++                            ctxlens=ctxlen,
++                            **kwargs,
++                        )
++                    )
++                )
+ 
+-            return await tqdm_asyncio.gather(*tasks, desc="Requesting API")
++            # return_exceptions=True: without this, one chunk exhausting max_retries
++            # (confirmed happening for real: a single connection timeout, ~15 minutes
++            # and 10,462 successful calls into a real deepseek-v4-flash run) makes
++            # asyncio.gather immediately propagate that exception -- tearing down
++            # every OTHER in-flight concurrent chunk along with it (visible as a burst
++            # of "Task exception was never retrieved" warnings) and losing every
++            # already-completed, already-paid-for result from this call, not just the
++            # one that actually failed. A failed chunk is replaced with empty-string
++            # placeholders instead of crashing the run: the "get-answer" regex filter
++            # can't match anything in "", so it correctly falls back to its
++            # "[invalid]" marker -- the same malformed/refused bucket a genuine bad
++            # response lands in (store.py's is_malformed, excluded from the accuracy
++            # denominator, reported as its own malformed_rate stat) -- rather than
++            # this one failure silently costing every other concurrent item's result.
++            results = await tqdm_asyncio.gather(*tasks, desc="Requesting API", return_exceptions=True)
++            final = []
++            for result, chunk in zip(results, request_chunks):
++                if isinstance(result, BaseException):
++                    eval_logger.error(
++                        f"A batch of {len(chunk)} request(s) failed after all retries "
++                        f"({type(result).__name__}: {result}) -- scoring as malformed/refused "
++                        "instead of crashing the run."
++                    )
++                    final.append([""] * len(chunk))
++                else:
++                    final.append(result)
++            return final
+ 
+     def _loglikelihood_tokens(self, requests, **kwargs) -> List[Tuple[float, bool]]:
+         assert (
+diff --git a/lm_eval/models/hf_vlms.py b/lm_eval/models/hf_vlms.py
+index c94c76b..d0c6fd8 100644
+--- a/lm_eval/models/hf_vlms.py
++++ b/lm_eval/models/hf_vlms.py
+@@ -31,7 +31,10 @@ class HFMultimodalLM(HFLM):
+     An abstracted Hugging Face model class for multimodal LMs like Llava and Idefics.
+     """
+ 
+-    AUTO_MODEL_CLASS = transformers.AutoModelForVision2Seq
++    # transformers 5.x removed AutoModelForVision2Seq (superseded by
++    # AutoModelForImageTextToText); guard so `import lm_eval` doesn't crash on
++    # newer transformers versions for code paths that don't use this class.
++    AUTO_MODEL_CLASS = getattr(transformers, "AutoModelForVision2Seq", None)
+     MULTIMODAL = True  # flag to indicate, for now, that this model type can run multimodal requests
+ 
+     def __init__(
+diff --git a/lm_eval/models/huggingface.py b/lm_eval/models/huggingface.py
+index 63ad144..b301c41 100644
+--- a/lm_eval/models/huggingface.py
++++ b/lm_eval/models/huggingface.py
+@@ -7,6 +7,28 @@ from typing import Dict, List, Literal, Optional, Tuple, Union
+ import torch
+ import torch.nn.functional as F
+ import transformers
++
++if not hasattr(torch, "accelerator"):
++    # torch.accelerator (device-agnostic current-accelerator lookup) was added
++    # in a later torch release than 2.5.1 (pinned in this venv). transformers
++    # 5.14.1's mxfp4 quantizer (used for gpt-oss-20b's native checkpoint) calls
++    # torch.accelerator.current_accelerator() unconditionally in two places
++    # (quantizer_mxfp4.py:78 and :188), regardless of the dequantize=True
++    # escape hatch on one of them -- AttributeError on this torch version, on
++    # any GPU. This shim faithfully replicates the real API's behavior (return
++    # the current default accelerator device, or None) rather than changing
++    # any quantizer logic -- a no-op on any torch version that already has the
++    # real thing.
++    import types
++
++    def _current_accelerator():
++        if torch.cuda.is_available():
++            return torch.device("cuda", torch.cuda.current_device())
++        return None
++
++    _accelerator_shim = types.ModuleType("torch.accelerator")
++    _accelerator_shim.current_accelerator = _current_accelerator
++    torch.accelerator = _accelerator_shim
+ from accelerate import (
+     Accelerator,
+     InitProcessGroupKwargs,
+@@ -87,9 +109,20 @@ class HFLM(TemplateLM):
+         peft: Optional[str] = None,
+         delta: Optional[str] = None,
+         autogptq: Optional[Union[bool, str]] = False,
++        # Hybrid-thinking chat templates (Qwen3.x family) inject a bare
++        # "<think>\n" before the scored continuation under the default
++        # loglikelihood protocol, silently corrupting the scored logprobs
++        # (documented finding, this project's own report) -- apply_chat_template()
++        # below has no way to pass this through otherwise (transformers'
++        # AutoTokenizer.apply_chat_template only forwards **kwargs into the
++        # Jinja render context, and the base method here didn't expose any).
++        # None (default) preserves the exact prior behavior for every other
++        # model -- this only takes effect when a config explicitly sets it.
++        enable_thinking: Optional[bool] = None,
+         **kwargs,
+     ) -> None:
+         super().__init__()
++        self._enable_thinking = enable_thinking
+ 
+         # optionally: take in an already-initialized transformers.PreTrainedModel
+         if not isinstance(pretrained, str):
+@@ -545,6 +578,22 @@ class HFLM(TemplateLM):
+ 
+         model_kwargs = kwargs if kwargs else {}
+ 
++        # gpt-oss-20b's native mxfp4 checkpoint hits a real transformers 5.14.1 /
++        # torch 2.5.1 incompatibility: Mxfp4Config.validate_environment() calls
++        # torch.accelerator.current_accelerator(), an API that doesn't exist in
++        # torch 2.5.1 (added in a later torch release) -- AttributeError,
++        # regardless of GPU (A100 is explicitly listed as supported by this same
++        # quantizer). The quantizer's own code already has a documented escape
++        # hatch: `if self.quantization_config.dequantize: return` short-circuits
++        # before ever reaching the buggy line. --model_args is a flat
++        # bool/int/float/str CLI string (simple_parse_args_string), so a real
++        # Mxfp4Config object can't be passed through it directly -- accept a
++        # simple flag instead and construct the object here.
++        if model_kwargs.pop("dequantize_mxfp4", False):
++            from transformers import Mxfp4Config
++
++            model_kwargs["quantization_config"] = Mxfp4Config(dequantize=True)
++
+         model_kwargs.update(
+             self._get_accelerate_args(
+                 parallelize=parallelize,
+@@ -1322,8 +1371,15 @@ class HFLM(TemplateLM):
+         """
+         Method to apply a chat template to a list of chat history between user and model.
+         """
++        extra_kwargs = {}
++        if self._enable_thinking is not None:
++            # Forwarded into the Jinja render context -- a no-op for templates
++            # that don't reference this variable (Jinja treats an unused kwarg
++            # as simply unused, not an error), real effect only for Qwen3.x-style
++            # templates that check it.
++            extra_kwargs["enable_thinking"] = self._enable_thinking
+         return self.tokenizer.apply_chat_template(
+-            chat_history, tokenize=False, add_generation_prompt=True
++            chat_history, tokenize=False, add_generation_prompt=True, **extra_kwargs
+         )
+ 
+     def get_model_info(self) -> dict:
+diff --git a/lm_eval/models/openai_completions.py b/lm_eval/models/openai_completions.py
+index 331a3f6..9bba764 100644
+--- a/lm_eval/models/openai_completions.py
++++ b/lm_eval/models/openai_completions.py
+@@ -1,3 +1,4 @@
++import json
+ import os
+ from functools import cached_property
+ from typing import Any, Dict, List, Optional, Tuple, Union
+@@ -6,6 +7,49 @@ from lm_eval.api.registry import register_model
+ from lm_eval.models.api_models import TemplateAPI
+ from lm_eval.utils import eval_logger
+ 
++# Real per-call token usage isn't captured anywhere upstream -- the harness's API
++# model classes extract only the answer text from each response and discard the
++# rest, including the `usage` field every OpenAI-compatible endpoint returns.
++# Appended to (not overwritten) so a killed/resumed run doesn't lose earlier
++# calls' usage; path is set via env var by pipeline/run.py so it lands under that
++# run's own output directory, not hardcoded here.
++_USAGE_LOG_PATH = os.environ.get("MILU_TOKEN_USAGE_LOG")
++
++
++def _log_usage(usage: Optional[dict], finish_reason: Optional[str] = None,
++               content_preview: Optional[str] = None) -> None:
++    if not _USAGE_LOG_PATH or not usage:
++        return
++    record = {
++        "prompt_tokens": usage.get("prompt_tokens"),
++        "completion_tokens": usage.get("completion_tokens"),
++        "total_tokens": usage.get("total_tokens"),
++    }
++    # completion_tokens is a COMBINED total (reasoning + visible answer) for
++    # reasoning models -- confirmed via a direct raw API call to qwen3.8-max
++    # (38 completion_tokens, 32 of them reasoning, only 6 for the actual
++    # answer). completion_tokens_details.reasoning_tokens is the real
++    # provider-reported split; not every provider/response includes it, so
++    # only recorded when present rather than defaulting to 0 (indistinguishable
++    # from "really zero reasoning tokens").
++    reasoning_tokens = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
++    if reasoning_tokens is not None:
++        record["reasoning_tokens"] = reasoning_tokens
++    # finish_reason="length" is the authoritative truncation signal (hit
++    # max_tokens before the model chose to stop on its own) -- more reliable
++    # than inferring truncation from completion_tokens landing near the cap,
++    # and content_preview lets a truncated call be matched back to which
++    # item it was without relying on token_usage.jsonl's write order lining
++    # up with raw_items.jsonl's doc order (it doesn't necessarily, since
++    # concurrent requests can complete and log in a different order than
++    # they were dispatched in).
++    if finish_reason is not None:
++        record["finish_reason"] = finish_reason
++    if content_preview is not None:
++        record["content_preview"] = content_preview
++    with open(_USAGE_LOG_PATH, "a") as f:
++        f.write(json.dumps(record) + "\n")
++
+ 
+ @register_model("local-completions")
+ class LocalCompletionsAPI(TemplateAPI):
+@@ -19,6 +63,15 @@ class LocalCompletionsAPI(TemplateAPI):
+             base_url=base_url, tokenizer_backend=tokenizer_backend, **kwargs
+         )
+ 
++    @cached_property
++    def api_key(self):
++        # Generic third-party OpenAI-compatible endpoints (unlike openai-completions/
++        # openai-chat-completions, which hardcode OPENAI_API_KEY) have no fixed provider,
++        # so no fixed env var name makes sense here -- pipeline/run.py sets this generic
++        # one from whatever provider-specific env var the model's config points at
++        # (api_key_env_var), read from .env.
++        return os.environ.get("MILU_API_KEY", "")
++
+     def _create_payload(
+         self,
+         messages: Union[List[List[int]], List[dict], List[str], str],
+@@ -85,14 +138,11 @@ class LocalCompletionsAPI(TemplateAPI):
+         if not isinstance(outputs, list):
+             outputs = [outputs]
+         for out in outputs:
++            _log_usage(out.get("usage"))
+             for choices in out["choices"]:
+                 res.append(choices["text"])
+         return res
+ 
+-    @property
+-    def api_key(self):
+-        return os.environ.get("OPENAI_API_KEY", "")
+-
+ 
+ @register_model("local-chat-completions")
+ class LocalChatCompletion(LocalCompletionsAPI):
+@@ -135,7 +185,7 @@ class LocalChatCompletion(LocalCompletionsAPI):
+         stop = gen_kwargs.pop("until", ["<|endoftext|>"])
+         if not isinstance(stop, (list, tuple)):
+             stop = [stop]
+-        return {
++        payload = {
+             "messages": messages,
+             "model": self.model,
+             "max_tokens": max_tokens,
+@@ -144,6 +194,66 @@ class LocalChatCompletion(LocalCompletionsAPI):
+             "seed": seed,
+             **gen_kwargs,
+         }
++        # --gen_kwargs is a flat CLI key=value string (simple_parse_args_string /
++        # handle_arg_string only coerce scalars) -- can't express DeepSeek's nested
++        # {"thinking": {"type": "disabled"}} directly, so accept a flat boolean flag
++        # here and build the real nested field ourselves. See DeepSeek's thinking-mode
++        # docs: reasoning is on by default, and reasoning tokens count against the
++        # same max_tokens budget as the final answer -- for a plain knowledge-MCQ
++        # benchmark (no reasoning credit anywhere else in this roster's protocol),
++        # disabling it keeps this model on equal footing with the rest of the league
++        # table and avoids reasoning tokens silently consuming the whole budget.
++        if payload.pop("disable_thinking", False):
++            payload["thinking"] = {"type": "disabled"}
++        # OpenRouter's unified reasoning-model field (works across providers routed
++        # through it, e.g. Qwen3.x-Max) -- same rationale/shape as disable_thinking
++        # above (DeepSeek's own provider-specific field), just a different nested
++        # key: https://openrouter.ai/docs/guides/best-practices/reasoning-tokens.
++        if payload.pop("disable_reasoning", False):
++            payload["reasoning"] = {"enabled": False}
++        # Some OpenRouter-routed models mark reasoning "mandatory" and reject both
++        # enabled=false and effort="none" outright (confirmed for qwen/qwen3.8-max:
++        # 400 "Reasoning is mandatory for this endpoint and cannot be disabled").
++        # For those, effort="minimal" is the lowest allocation OpenRouter still
++        # accepts (~10% of the token budget going to reasoning, per the same docs
++        # page) -- not a true disable, so this model stays on a different
++        # protocol footing than the fully-disabled-thinking rows (same caveat this
++        # project already applies to other reasoning re-runs). Named
++        # openrouter_ (not the bare "reasoning_effort" a provider's own native API
++        # might expose, e.g. Sarvam's -- see sarvam_reasoning_effort below) because
++        # OpenRouter nests this under "reasoning", not as a top-level field.
++        openrouter_reasoning_effort = payload.pop("openrouter_reasoning_effort", None)
++        # OpenRouter's reasoning field takes EITHER effort OR max_tokens, not
++        # both (its own docs: "One of the following (not both)") -- max_tokens
++        # is the Anthropic-style numeric budget; qwen3.8-max's own model
++        # metadata (checked via OpenRouter's /api/v1/models endpoint) only
++        # advertises supported_efforts, no numeric option, so this may get
++        # rejected or silently reinterpreted for this specific model --
++        # untested until run for real.
++        openrouter_reasoning_max_tokens = payload.pop("openrouter_reasoning_max_tokens", None)
++        if openrouter_reasoning_max_tokens:
++            payload["reasoning"] = {"max_tokens": int(openrouter_reasoning_max_tokens)}
++        elif openrouter_reasoning_effort:
++            payload["reasoning"] = {"effort": openrouter_reasoning_effort}
++        # exclude=true (OpenRouter docs: "have the model perform reasoning
++        # internally without returning it in the response") doesn't reduce
++        # reasoning-token spend or budget usage -- reasoning still happens and
++        # still bills -- it just drops the reasoning text from the response
++        # payload. Only meaningful combined with openrouter_reasoning_effort
++        # above (there'd be no reasoning field to attach it to otherwise).
++        if payload.pop("openrouter_exclude_reasoning", False) and "reasoning" in payload:
++            payload["reasoning"]["exclude"] = True
++        # Sarvam-105B (api.sarvam.ai, OpenAI-compatible) exposes reasoning_effort as
++        # a plain top-level field, not nested -- low/medium/high tune it, and per
++        # Sarvam's own docs ("disable reasoning with reasoning_effort=None")
++        # reasoning is fully disableable, unlike qwen3.8-max above. --gen_kwargs
++        # can't express a literal JSON null through its flat CLI string, so
++        # "none" is treated as the disable sentinel and translated to a real
++        # Python None (-> JSON null) here.
++        sarvam_reasoning_effort = payload.pop("sarvam_reasoning_effort", None)
++        if sarvam_reasoning_effort:
++            payload["reasoning_effort"] = None if sarvam_reasoning_effort == "none" else sarvam_reasoning_effort
++        return payload
+ 
+     @staticmethod
+     def parse_generations(outputs: Union[Dict, List[Dict]], **kwargs) -> List[str]:
+@@ -152,7 +262,22 @@ class LocalChatCompletion(LocalCompletionsAPI):
+             outputs = [outputs]
+         for out in outputs:
+             for choices in out["choices"]:
+-                res.append(choices["message"]["content"])
++                # content comes back JSON null (not "") when a mandatory-reasoning
++                # model (e.g. qwen/qwen3.8-max on OpenRouter) exhausts max_tokens
++                # entirely on reasoning before writing any answer content --
++                # confirmed via a real finish_reason="length" response. Downstream
++                # RegexFilter.apply calls self.regex.findall(resp), which raises
++                # TypeError on None instead of just failing to match -- coerce to
++                # "" so this lands as the standard "[invalid]"/malformed outcome
++                # (store.py's existing convention) instead of crashing the run.
++                content = choices["message"]["content"] or ""
++                # logged per-choice (not once per `out`, before this loop) so
++                # finish_reason/content_preview line up with the exact choice
++                # they describe -- matters once n>1 is ever used, and costs
++                # nothing when n=1 (every config in this project's roster).
++                _log_usage(out.get("usage"), finish_reason=choices.get("finish_reason"),
++                           content_preview=content[:80])
++                res.append(content)
+         return res
+ 
+     def tok_encode(
+diff --git a/lm_eval/models/utils.py b/lm_eval/models/utils.py
+index 72fac03..e6669cf 100644
+--- a/lm_eval/models/utils.py
++++ b/lm_eval/models/utils.py
+@@ -639,7 +639,21 @@ def configure_pad_token(
+     Raises:
+         AssertionError: If the tokenizer is of type RWKVWorldTokenizer or Rwkv5Tokenizer and the padding token id is not 0.
+     """
+-    if tokenizer.pad_token:
++    try:
++        has_pad_token = bool(tokenizer.pad_token)
++    except NotImplementedError:
++        # vLLM's MistralTokenizer wrapper (for Mistral's own Tekken tokenizer, used
++        # when tokenizer_mode="mistral") doesn't implement the HF pad_token concept
++        # at all -- it's not a real PreTrainedTokenizer, and vLLM's own
++        # generation/scoring path manages padding internally, so this whole
++        # HF-oriented formality is moot for it. eos_token_id IS implemented on this
++        # wrapper (unlike the text-based unk_token/eos_token/add_special_tokens
++        # fallbacks below, none of which this wrapper supports either), so use that
++        # directly and skip the rest of this function.
++        tokenizer.pad_token_id = tokenizer.eos_token_id
++        return tokenizer
++
++    if has_pad_token:
+         pass
+     elif tokenizer.unk_token:
+         tokenizer.pad_token_id = tokenizer.unk_token_id
+diff --git a/lm_eval/models/vllm_causallms.py b/lm_eval/models/vllm_causallms.py
+index 168f490..2478629 100644
+--- a/lm_eval/models/vllm_causallms.py
++++ b/lm_eval/models/vllm_causallms.py
+@@ -21,8 +21,10 @@ from lm_eval.utils import (
+ try:
+     import ray
+     from vllm import LLM, SamplingParams
++    from vllm.inputs import TokensPrompt
+     from vllm.lora.request import LoRARequest
+     from vllm.transformers_utils.tokenizer import get_tokenizer
++    from vllm.transformers_utils.tokenizers.mistral import MistralTokenizer
+ except ModuleNotFoundError:
+     pass
+ 
+@@ -60,9 +62,15 @@ class VLLM(TemplateLM):
+         device: str = "cuda",
+         data_parallel_size: int = 1,
+         lora_local_path: str = None,
++        enable_thinking: Optional[bool] = None,
+         **kwargs,
+     ):
+         super().__init__()
++        # Declared as a named param (not left in **kwargs) specifically so it
++        # never reaches self.model_args / vLLM's own LLM(**model_args) call below
++        # -- vLLM's LLM constructor has no such kwarg. See apply_chat_template's
++        # use of this, mirroring huggingface.py's identical enable_thinking patch.
++        self._enable_thinking = enable_thinking
+ 
+         if not find_spec("vllm"):
+             raise Exception(
+@@ -93,6 +101,17 @@ class VLLM(TemplateLM):
+             "quantization": quantization,
+             "seed": int(seed),
+         }
++        # MILU's protocol (loglikelihood MCQ / generate_until JSON-answer) never
++        # sends image input, even for natively multimodal checkpoints (e.g. Mistral
++        # Small 3.1, Llama 4 Scout) -- but vLLM's own memory-profiling step still
++        # generates dummy multimodal input to reserve encoder-cache budget unless
++        # told otherwise, which hit a real bug for Mistral Small 3.1's Pixtral
++        # processor (`ValueError: Mismatch in image token count between text and
++        # input_ids`). skip_mm_profiling avoids that dummy-data path entirely;
++        # limit_mm_per_prompt=0 additionally tells vLLM not to reserve any encoder
++        # budget for images we'll never send. Harmless no-ops for text-only models.
++        self.model_args.setdefault("skip_mm_profiling", True)
++        self.model_args.setdefault("limit_mm_per_prompt", {"image": 0})
+         self.model_args.update(kwargs)
+         self.batch_size = (
+             "auto"
+@@ -121,6 +140,20 @@ class VLLM(TemplateLM):
+             tokenizer_revision=tokenizer_revision,
+         )
+         self.tokenizer = configure_pad_token(self.tokenizer)
++        # Cache: rendered chat-template string -> the CORRECT token ids from a real
++        # tokenize=True chat-template call. Needed for tokenizers whose
++        # apply_chat_template() only returns token ids (e.g. MistralTokenizer,
++        # tokenizer_mode="mistral") -- decoding those ids back to a string (done in
++        # apply_chat_template() below, since the rest of the harness needs a string)
++        # is LOSSY: this tokenizer's decode()/convert_tokens_to_string() unconditionally
++        # strip special tokens (verified: MistralTokenizer can't even decode with
++        # skip_special_tokens=False, and re-encoding the decoded string does not
++        # reproduce the original ids -- e.g. [INST]/[/INST]/<s> get retokenized as
++        # literal characters instead of recognized as the special tokens they were).
++        # tok_encode() below checks this cache first so a context that was JUST
++        # chat-templated gets the real, correct token ids instead of a broken
++        # re-encoding of the lossy string.
++        self._chat_template_token_cache: Dict[str, List[int]] = {}
+         self.add_bos_token = add_bos_token
+         if "gemma" in pretrained.lower():
+             self.add_bos_token = True
+@@ -183,9 +216,36 @@ class VLLM(TemplateLM):
+         """
+         Method to apply a chat template to a list of chat history between user and model.
+         """
+-        return self.tokenizer.apply_chat_template(
+-            chat_history, tokenize=False, add_generation_prompt=True
++        extra_kwargs = {}
++        if self._enable_thinking is not None:
++            # Forwarded into the Jinja render context -- a no-op for templates
++            # that don't reference this variable, real effect only for
++            # thinking-toggle templates (Qwen3.x, Sarvam's <|nothink|> tag).
++            extra_kwargs["enable_thinking"] = self._enable_thinking
++        rendered = self.tokenizer.apply_chat_template(
++            chat_history, tokenize=False, add_generation_prompt=True, **extra_kwargs
+         )
++        if isinstance(rendered, list):
++            # vLLM's MistralTokenizer wrapper (tokenizer_mode="mistral") always
++            # returns token ids from apply_chat_template() -- tokenize=False isn't
++            # honored (mistral_common's chat rendering is fundamentally token-based,
++            # not string-based); `rendered` here IS already the correct, real
++            # tokenize=True-equivalent id sequence (INST/BOS tokens and all).
++            # Every downstream consumer of this (task.py's fewshot context
++            # building, _encode_pair's/generate_until's string ops) expects a
++            # rendered STRING though, same as every other tokenizer -- decode
++            # back to text so the rest of the pipeline still works, but ALSO
++            # cache the real ids keyed by that string, since decoding then
++            # re-encoding this tokenizer's special tokens is lossy (verified:
++            # re-encoding a decoded "<s>[INST]...[/INST]" string does not
++            # reproduce the original ids -- they get retokenized as literal
++            # characters instead of recognized as special tokens). tok_encode()
++            # checks this cache first so a context that was just chat-templated
++            # gets the real ids instead of a broken re-encoding of the lossy string.
++            token_ids = rendered
++            rendered = self.tokenizer.decode(rendered)
++            self._chat_template_token_cache[rendered] = token_ids
++        return rendered
+ 
+     @property
+     def tokenizer_name(self) -> str:
+@@ -200,6 +260,26 @@ class VLLM(TemplateLM):
+     ) -> Union[List[int], List[List[int]]]:
+         if not add_special_tokens:
+             add_special_tokens = False or self.add_bos_token
++
++        if isinstance(self.tokenizer, MistralTokenizer):
++            # MistralTokenizer's __call__ doesn't implement the generic HF
++            # tokenizer(string, ..., return_attention_mask=...) -> BatchEncoding
++            # contract at all (TypeError: unexpected keyword argument
++            # 'return_attention_mask') -- it only exposes a single-string
++            # .encode(text, truncation, max_length, add_special_tokens) -> list[int].
++            # Loop over batches ourselves rather than relying on batch __call__ support.
++            def _encode_one(s: str) -> List[int]:
++                if s in self._chat_template_token_cache:
++                    # s is exactly a string apply_chat_template() just rendered --
++                    # use the real cached ids (with correct special tokens) instead
++                    # of re-encoding the decoded string, which can't recover them.
++                    enc = self._chat_template_token_cache[s]
++                else:
++                    enc = self.tokenizer.encode(s, add_special_tokens=add_special_tokens)
++                return enc[-left_truncate_len:] if left_truncate_len else enc
++
++            return _encode_one(string) if isinstance(string, str) else [_encode_one(s) for s in string]
++
+         encoding: Union[List[List[int]], List[int]] = self.tokenizer(
+             string,
+             add_special_tokens=add_special_tokens,
+@@ -243,7 +323,8 @@ class VLLM(TemplateLM):
+             ):
+                 llm = LLM(**model_args)
+                 return llm.generate(
+-                    prompt_token_ids=requests, sampling_params=sampling_params
++                    prompts=[TokensPrompt(prompt_token_ids=r) for r in requests],
++                    sampling_params=sampling_params,
+                 )
+ 
+             # dispatch requests to all self.data_parallel_size workers, in interleaved fashion
+@@ -257,16 +338,21 @@ class VLLM(TemplateLM):
+             # flatten results
+             return undistribute(results)
+ 
++        # vLLM's LLM.generate() dropped the prompt_token_ids= kwarg (this fork is
++        # pinned to lm_eval 0.4.4, contemporaneous with an older vLLM API) -- newer
++        # versions take a `prompts=` sequence of TokensPrompt objects instead.
++        # Confirmed via inspect.signature(LLM.generate) under vllm 0.11.0.
++        prompts = [TokensPrompt(prompt_token_ids=r) for r in requests]
+         if self.lora_request is not None:
+             outputs = self.model.generate(
+-                prompt_token_ids=requests,
++                prompts=prompts,
+                 sampling_params=sampling_params,
+                 use_tqdm=True if self.batch_size == "auto" else False,
+                 lora_request=self.lora_request,
+             )
+         else:
+             outputs = self.model.generate(
+-                prompt_token_ids=requests,
++                prompts=prompts,
+                 sampling_params=sampling_params,
+                 use_tqdm=True if self.batch_size == "auto" else False,
+             )
+@@ -369,10 +455,22 @@ class VLLM(TemplateLM):
+                 )
+             # add EOS token to stop sequences
+             eos = self.tokenizer.decode(self.eot_token_id)
+-            if not until:
+-                until = [eos]
+-            else:
+-                until.append(eos)
++            # MistralTokenizer.decode() unconditionally strips special tokens (same
++            # limitation as apply_chat_template() above) -- decoding the EOS id
++            # produces an empty string, which vLLM's SamplingParams rejects
++            # outright ("stop cannot contain an empty string"). Only append a
++            # non-empty text stop sequence; stop_token_ids (set on kwargs below,
++            # passed straight to SamplingParams) covers EOS by id instead, so
++            # generation still correctly stops there regardless of whether this
++            # tokenizer can represent it as literal text.
++            if eos:
++                if not until:
++                    until = [eos]
++                else:
++                    until.append(eos)
++            elif not until:
++                until = []
++            kwargs.setdefault("stop_token_ids", [self.eot_token_id])
+             if "max_gen_toks" in kwargs.keys():
+                 max_gen_toks = kwargs.pop("max_gen_toks")
+             else:
+@@ -524,8 +622,7 @@ class VLLM(TemplateLM):
+ 
+         return continuation_logprobs, is_greedy
+ 
+-    @staticmethod
+-    def modify_gen_kwargs(kwargs: dict) -> dict:
++    def modify_gen_kwargs(self, kwargs: dict) -> dict:
+         # sampling_params
+         do_sample = kwargs.pop("do_sample", None)
+         if do_sample is False and "temperature" not in kwargs:
+@@ -533,8 +630,20 @@ class VLLM(TemplateLM):
+                 "Got `do_sample=False` and no temperature value, setting VLLM temperature to 0.0 ..."
+             )
+             kwargs["temperature"] = 0.0
+-        # hf defaults
+-        kwargs["skip_special_tokens"] = kwargs.get("skip_special_tokens", False)
++        # hf defaults: skip_special_tokens=False (unlike this method's own default,
++        # since HF's own generate() doesn't skip them) -- but MistralTokenizer
++        # (tokenizer_mode="mistral") cannot support False at all (it hardcodes an
++        # assert requiring True; vLLM's own detokenizer_utils.py otherwise crashes
++        # calling convert_ids_to_tokens(skip_special_tokens=False) mid-generation).
++        # Force True specifically for that tokenizer; keep the existing False
++        # default for every other tokenizer so this doesn't change established
++        # behavior elsewhere.
++        default_skip_special_tokens = (
++            True if isinstance(self.tokenizer, MistralTokenizer) else False
++        )
++        kwargs["skip_special_tokens"] = kwargs.get(
++            "skip_special_tokens", default_skip_special_tokens
++        )
+         kwargs["spaces_between_special_tokens"] = kwargs.get(
+             "spaces_between_special_tokens", False
+         )

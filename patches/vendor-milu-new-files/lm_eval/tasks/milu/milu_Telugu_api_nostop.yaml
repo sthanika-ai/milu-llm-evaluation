@@ -1,0 +1,5 @@
+dataset_name: Telugu
+include: _default_template_api_nostop.yaml
+tag: milu-api-nostop-core
+task: milu_Telugu_api_nostop
+task_alias: milu_Telugu_api_nostop

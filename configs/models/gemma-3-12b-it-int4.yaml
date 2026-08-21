@@ -1,0 +1,22 @@
+model_id: gemma-3-12b-it-int4
+hf_checkpoint: unsloth/gemma-3-12b-it-qat-int4-bnb-4bit
+revision: 8ca2c0834b8376778202ab03623ce89ab4b9b5a2
+access_date: "2026-07-28"
+serving_backend: hf-causal-multimodal
+venv: multimodal
+protocol: loglikelihood
+dtype: bfloat16
+quantization: int4
+already_quantized: true
+apply_chat_template: true
+generation_config:
+  temperature: 0.0
+  do_sample: false
+num_fewshot: 5
+tasks:
+  - milu
+notes: >
+  Standard 5-shot loglikelihood protocol, same as gemma-3-12b-it.yaml (its bf16
+  counterpart) -- this is the INT4 quantization-study row. `already_quantized: true`
+  so pipeline/run.py skips the `load_in_4bit` flag (checkpoint ships pre-quantized).
+  No library patch needed.

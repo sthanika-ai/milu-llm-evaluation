@@ -1,0 +1,21 @@
+model_id: gemma-3-4b-it
+hf_checkpoint: google/gemma-3-4b-it
+revision: 093f9f388b31de276ce2de164bdc2081324b9767
+access_date: "2026-07-28"
+serving_backend: hf-causal-multimodal
+venv: multimodal
+protocol: loglikelihood
+dtype: bfloat16
+quantization: none
+apply_chat_template: true
+generation_config:
+  temperature: 0.0
+  do_sample: false
+num_fewshot: 5
+tasks:
+  - milu
+notes: >
+  Standard 5-shot loglikelihood protocol (not a hybrid-thinking model -- plain
+  instruct chat template). Uses the `hf-causal-multimodal` backend
+  (AutoModelForImageTextToText) since Gemma3ForConditionalGeneration is natively
+  multimodal, even though MILU is text-only; no library patch needed for this model.

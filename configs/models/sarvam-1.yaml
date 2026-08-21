@@ -1,0 +1,19 @@
+model_id: sarvam-1
+hf_checkpoint: sarvamai/sarvam-1
+revision: e9607337286ddf496d4a2562b194e489dcf3feea
+access_date: "2026-07-28"
+serving_backend: hf
+venv: default
+protocol: loglikelihood
+dtype: bfloat16
+quantization: none
+apply_chat_template: true
+generation_config:
+  temperature: 0.0
+  do_sample: false
+num_fewshot: 5
+tasks:
+  - milu
+notes: >
+  Standard 5-shot loglikelihood protocol; plain LlamaForCausalLM via the `hf`
+  backend, no thinking/chat-template caveats, no library patch needed.

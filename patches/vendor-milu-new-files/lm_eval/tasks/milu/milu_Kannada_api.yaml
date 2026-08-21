@@ -1,0 +1,5 @@
+dataset_name: Kannada
+include: _default_template_api.yaml
+tag: milu-api-core
+task: milu_Kannada_api
+task_alias: milu_Kannada_api

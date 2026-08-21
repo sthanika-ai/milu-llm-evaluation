@@ -1,0 +1,19 @@
+group: milu_api_nostop
+task:
+  - milu_English_api_nostop
+  - milu_Bengali_api_nostop
+  - milu_Hindi_api_nostop
+  - milu_Tamil_api_nostop
+  - milu_Telugu_api_nostop
+  - milu_Malayalam_api_nostop
+  - milu_Kannada_api_nostop
+  - milu_Marathi_api_nostop
+  - milu_Gujarati_api_nostop
+  - milu_Punjabi_api_nostop
+  - milu_Odia_api_nostop
+
+aggregate_metric_list:
+  - metric: exact_match
+    weight_by_size: True
+metadata:
+  version: 0.0

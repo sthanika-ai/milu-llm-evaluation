@@ -1,0 +1,27 @@
+model_id: sarvam-30b-llamacpp-gguf
+serving_backend: local-chat-completions
+api_endpoint: sarvam-30b-gguf-q4km
+base_url: http://127.0.0.1:8090/v1/chat/completions
+access_date: "2026-08-07"
+protocol: generate_until
+apply_chat_template: true
+num_fewshot: 0
+num_concurrent: 32
+max_retries: 1
+timeout_seconds: 10800
+generation_config:
+  temperature: 0.0
+  max_gen_toks: 1900
+tasks:
+  - milu_api_nostop
+notes: >
+  Generative (0-shot), thinking allowed with a hard budget cap -- served via a
+  from-source llama.cpp build rather than `hf`/`vllm`, since bf16 is too slow at
+  this size on this hardware and no working FP8/INT4 path existed. Requires a
+  hand-started `llama-server` on this `base_url` first (built by
+  scripts/setup_vendor.sh).
+
+  No patch to vendor/MILU or llama.cpp -- uses llama.cpp's own native
+  `--reasoning-budget` flag (server-side, not a code patch) to cap the thinking
+  phase, plus this project's `milu_api_nostop` task (part of patches/, see that
+  README) so generation isn't cut off by a stop-sequence mid-reasoning.

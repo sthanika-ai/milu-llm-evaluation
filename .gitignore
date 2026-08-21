@@ -1,0 +1,101 @@
+# Secrets
+.env
+*.pem
+*.key
+
+# Python virtual environments (see requirements/README.md)
+.venv/
+.venv-*/
+venv/
+env/
+
+# Python cache/build
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# Vendored third-party code, cloned by scripts/setup_vendor.sh (see patches/README.md)
+vendor/
+
+# Generated evaluation data (regeneratable by running the pipeline)
+data_raw_outputs/
+mlruns/
+results/
+
+# Local backup of pre-publication doc drafts
+originals/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local tooling config
+.claude/
+
+# Model weights, if ever downloaded locally
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.ckpt
+
+# Curated model registry -- see configs/README.md
+configs/models/*
+!configs/models/gemma-2-2b-it.yaml
+!configs/models/gemma-3-4b-it.yaml
+!configs/models/gemma-3-12b-it.yaml
+!configs/models/gemma-3-12b-it-int4.yaml
+!configs/models/gemma-3-27b-it.yaml
+!configs/models/gemma-4-12b-it.yaml
+!configs/models/qwen2.5-7b-instruct.yaml
+!configs/models/qwen3-vl-8b-instruct.yaml
+!configs/models/qwen3.6-27b-genthinkoff.yaml
+!configs/models/qwen3.6-27b-llamacpp-gguf.yaml
+!configs/models/mistral-small-3.1-24b.yaml
+!configs/models/phi-4-vllm.yaml
+!configs/models/sarvam-1.yaml
+!configs/models/sarvam-m-thinkmode-0shot-json.yaml
+!configs/models/sarvam-30b-llamacpp-gguf.yaml
+!configs/models/gpt-oss-20b-thinkmode-vllm.yaml
+!configs/models/llama-4-scout.yaml
+!configs/models/deepseek-v4.yaml
+!configs/models/qwen3.8-max.yaml
+
+# Vendor patch overlay -- investigation-only task variants, see patches/README.md
+patches/vendor-milu-new-files/lm_eval/tasks/milu/milu_Gujarati_api_nostop_lastmatch.yaml
+patches/vendor-milu-new-files/lm_eval/tasks/milu/_default_template_api_nostop_lastmatch.yaml
+patches/vendor-milu-new-files/lm_eval/tasks/milu/milu_Gujarati_pinned20241107.yaml
+
+# Internal narrative report and supporting data -- not part of the public repo
+reports/
+
+# Internal-only working documents, not part of the public repo
+MILU_Bench_Run.md
+MILU_Report_Page.html
+MILU_Report_Page_Mock.html
+
+# Auxiliary pipeline scripts used to produce a few reported rows -- not published,
+# see docs/reproduction.md
+pipeline/merge_gpt_oss_vllm_retry.py
+pipeline/merge_retry_results.py
+pipeline/replicate_think_mode.py
+pipeline/replicate_think_mode_vllm.py
+pipeline/retry_failed_items.py
+pipeline/retry_gpt_oss_vllm_malformed.py
+pipeline/retry_sarvam_gguf_malformed.py
+pipeline/run_split_2gpu.py
+pipeline/worst_case_batch_test.py
+pipeline/xlt_4way_comparison_gptoss.py
+pipeline/xlt_experiment.py
+pipeline/xlt_experiment_gptoss.py
+pipeline/xlt_reasoning_inspect.py
+pipeline/xlt_reasoning_inspect_sarvam_m.py

@@ -1,0 +1,5 @@
+dataset_name: Gujarati
+include: _default_template_api.yaml
+tag: milu-api-core
+task: milu_Gujarati_api
+task_alias: milu_Gujarati_api

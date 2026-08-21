@@ -1,0 +1,40 @@
+MIT License
+
+Copyright (c) 2026 the contributors to this repository
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+This license covers the original contents of this repository: the evaluation
+pipeline (`pipeline/`), model configs (`configs/`), scripts (`scripts/`),
+documentation (`docs/`), and tests (`tests/`).
+
+It does NOT cover code vendored from third parties, which remains under its own
+upstream license:
+
+- `vendor/MILU` (cloned by `scripts/setup_vendor.sh`, not committed to this repo) —
+  AI4Bharat/MILU and EleutherAI/lm-evaluation-harness, MIT License. See
+  `patches/README.md` for this project's own modifications to that code, distributed
+  under the same MIT terms.
+- `vendor/llama.cpp` (cloned by `scripts/setup_vendor.sh`, not committed to this repo) —
+  the ggml/llama.cpp project, MIT License.
+
+It also does NOT grant any rights to the MILU dataset itself, which is distributed
+separately by AI4Bharat/IBM under its own terms — see the root README.

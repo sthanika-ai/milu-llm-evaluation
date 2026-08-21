@@ -1,0 +1,29 @@
+model_id: qwen3.6-27b-genthinkoff
+hf_checkpoint: Qwen/Qwen3.6-27B
+revision: 6a9e13bd6fc8f0983b9b99948120bc37f49c13e9
+access_date: "2026-08-05"
+serving_backend: hf-causal-multimodal
+venv: multimodal
+protocol: generate_until
+dtype: bfloat16
+quantization: none
+apply_chat_template: true
+enable_thinking: false
+batch_size: 8
+num_fewshot: 0
+generation_config:
+  temperature: 0.0
+  do_sample: false
+  max_gen_toks: 50
+tasks:
+  - milu_api
+notes: >
+  Generative (0-shot), thinking forced off -- hybrid-thinking correction of
+  qwen3.6-27b.yaml, whose loglikelihood run silently scored "jump from a bare,
+  unclosed `<think>` tag straight to an answer" (67.00% here vs. 37.82% broken).
+
+  One patch to vendor/MILU (see patches/): `enable_thinking=False` threaded
+  into `apply_chat_template()` in `huggingface.py`/`vllm_causallms.py`, default
+  `None` so every other model's behavior is unaffected. The standard (not
+  `_nostop`) API task is correct here specifically because thinking is off, so
+  there's no `<think>` block to avoid truncating.

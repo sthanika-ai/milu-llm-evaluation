@@ -1,0 +1,53 @@
+cff-version: 1.2.0
+message: >-
+  If you use this evaluation pipeline, its configs, or its results, please
+  cite this repository. If you use the MILU benchmark itself, please cite
+  the original MILU paper (see references below).
+title: >-
+  MILU Evaluation of Newer LLMs: a reproducible pipeline and results for
+  evaluating large language models on the MILU Indic-language benchmark
+type: software
+# TODO (manual step before publishing): replace with the real GitHub URL once
+# this repository has a home, and add real author name(s)/ORCID here.
+url: "https://github.com/REPLACE_ME/milu-llm-evaluation"
+repository-code: "https://github.com/REPLACE_ME/milu-llm-evaluation"
+license: MIT
+authors:
+  - name: "REPLACE_ME"
+date-released: "2026-08-11"
+references:
+  - type: conference-paper
+    title: "MILU: A Multi-task Indic Language Understanding Benchmark"
+    authors:
+      - family-names: Verma
+        given-names: Sshubam
+      - family-names: "Khan"
+        given-names: "Mohammed Safi Ur Rahman"
+      - family-names: Kumar
+        given-names: Vishwajeet
+      - family-names: Murthy
+        given-names: Rudra
+      - family-names: Sen
+        given-names: Jaydeep
+    year: 2025
+    month: 4
+    publisher:
+      name: "Association for Computational Linguistics"
+    url: "https://aclanthology.org/2025.naacl-long.507/"
+    doi: "10.18653/v1/2025.naacl-long.507"
+    notes: >-
+      Proceedings of the 2025 Conference of the Nations of the Americas
+      Chapter of the Association for Computational Linguistics: Human
+      Language Technologies (Volume 1: Long Papers), pages 10076-10132.
+      Also available as arXiv:2411.02538.
+  - type: software
+    title: "MILU"
+    repository-code: "https://github.com/AI4Bharat/MILU"
+    license: MIT
+  - type: software
+    title: "A framework for few-shot language model evaluation (lm-evaluation-harness)"
+    authors:
+      - name: "Gao, Leo and Tow, Jonathan and Abbasi, Baber and Biderman, Stella and Black, Sid and DiPofi, Anthony and Foster, Charles and Golding, Laurence and Hsu, Jeffrey and Le Noac'h, Alain and Li, Haonan and McDonell, Kyle and Muennighoff, Niklas and Ociepa, Chris and Phang, Jason and Reynolds, Laria and Schoelkopf, Hailey and Skowron, Aviya and Sutawika, Lintang and Tang, Eric and Thite, Anish and Wang, Ben and Wang, Kevin and Zou, Andy"
+    version: "v0.4.0"
+    doi: "10.5281/zenodo.10256836"
+    url: "https://zenodo.org/records/10256836"

@@ -1,0 +1,26 @@
+model_id: gemma-2-2b-it
+hf_checkpoint: google/gemma-2-2b-it
+revision: 299a8560bedf22ed1c72a8a11e7dce4a7f9f51f8
+access_date: "2026-07-27"
+serving_backend: hf
+protocol: loglikelihood
+dtype: bfloat16
+quantization: none
+apply_chat_template: true
+gpu: cuda:0
+generation_config:
+  temperature: 0.0
+  do_sample: false
+num_fewshot: 5
+tasks:
+  - milu_Gujarati
+notes: >
+  Standard 5-shot loglikelihood protocol, matching the paper exactly -- used here as
+  the sanity gate (single language, Gujarati only, not the full 11-language group),
+  not a full roster row. No library patches needed; plain `hf` backend. Reproduces
+  the paper's own published number (29.25%) within about a point across two runs
+  (28.62% and 28.33%, under two different HF dataset revisions) -- see
+  docs/reproduction.md for the command and expected result.
+paper_reference:
+  table: "arXiv:2411.02538 Table 3"
+  gu: 29.25

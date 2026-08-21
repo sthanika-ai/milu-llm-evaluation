@@ -1,0 +1,43 @@
+model_id: qwen3.6-27b-llamacpp-gguf
+serving_backend: local-chat-completions
+api_endpoint: qwen3.6-27b-gguf-q4km
+base_url: http://127.0.0.1:8094/v1/chat/completions
+access_date: "2026-08-22"
+protocol: generate_until
+apply_chat_template: true
+num_fewshot: 0
+num_concurrent: 32
+max_retries: 1
+timeout_seconds: 129600
+generation_config:
+  temperature: 0.0
+  max_gen_toks: 3072
+tasks:
+  - milu_api_nostop
+notes: >
+  Generative (0-shot), thinking allowed with no budget cap -- the counterpart
+  to qwen3.6-27b-genthinkoff.yaml (thinking forced off, 67.00%), letting this
+  model reason freely instead. Real result: 83.84% overall, +16.84 points over
+  the thinking-off row -- the largest thinking-on-vs-off delta measured for any
+  model in this roster (see DEVELOPER_NOTES.md).
+
+  Served via the official ggml-org/Qwen3.6-27B-GGUF release (Q4_K_M, single
+  19.1GB file) through the same from-source llama.cpp build already compiled
+  for Sarvam-30B (vendor/llama.cpp has native `qwen35`/`qwen35moe` architecture
+  support -- no rebuild needed). Same rationale as Sarvam-30B: the `hf`/`vllm`
+  backends risk the same CUDA-version wall documented elsewhere in this
+  project, GGUF sidesteps it entirely, and a working llama.cpp build already
+  existed on this box.
+
+  Unlike Sarvam-30B, no `--reasoning-budget` cap was applied here, so this
+  model's malformed rate (3.92%, 3,123/79,608 items) reflects uncapped
+  reasoning-budget exhaustion against `max_gen_toks=3072` -- confirmed via the
+  real per-request `finish_reason` log (Gujarati: 212/4,817 requests hit
+  `"length"`, accounting for 96% of that language's malformed items). Applying
+  a reasoning-budget cap, as Sarvam-30B's investigation found, would likely
+  recover most of these -- not yet attempted for this model.
+
+  The historical production run was split across per-language configs and two
+  parallel llama-server instances for throughput (see the full local registry,
+  not published here) rather than run as this single consolidated config --
+  this file is the single-command equivalent, per configs/README.md.

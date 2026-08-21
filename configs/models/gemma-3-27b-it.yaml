@@ -1,0 +1,24 @@
+model_id: gemma-3-27b-it
+hf_checkpoint: google/gemma-3-27b-it
+revision: 005ad3404e59d6023443cb575daa05336842228a
+access_date: "2026-07-28"
+serving_backend: hf-causal-multimodal
+venv: multimodal
+protocol: loglikelihood
+dtype: bfloat16
+quantization: none
+apply_chat_template: true
+batch_size: 8
+generation_config:
+  temperature: 0.0
+  do_sample: false
+num_fewshot: 5
+tasks:
+  - milu
+notes: >
+  Standard 5-shot loglikelihood protocol (not a hybrid-thinking model -- plain
+  instruct chat template). Uses the `hf-causal-multimodal` backend
+  (AutoModelForImageTextToText) since Gemma3ForConditionalGeneration is natively
+  multimodal, even though MILU is text-only; no library patch needed for this model.
+  `batch_size: 8` is this checkpoint's real memory ceiling on an 80GB GPU (16 and 32
+  both OOM'd immediately).
