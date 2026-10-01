@@ -1,241 +1,106 @@
 # MILU Evaluation of Newer LLMs
 
-A reproducible pipeline and results for evaluating large language models on
-[MILU](https://arxiv.org/abs/2411.02538) — [AI4Bharat](https://ai4bharat.iitm.ac.in/) and
-IBM's Multi-task Indic Language Understanding benchmark: ~85,000 multiple-choice questions
-across 8 domains and 41 subjects, in 11 Indic languages, drawn from Indian regional and state
-exams (NAACL 2025). MILU's own paper evaluated 42+ LLMs current as of late 2024; the top
-score (GPT-4o) was ~74%.
+A reproducible pipeline and results for evaluating 18 newer LLMs on MILU, AI4Bharat and IBM's Multi-task Indic Language Understanding benchmark, with measured GPU-hours next to every accuracy number.
 
-This repository presents a completed evaluation campaign: 18 models, all 11 MILU languages,
-end to end. Every reported figure traces back to a raw model output through the pipeline in
-this repository, so results can be independently reproduced or audited rather than taken on
-faith.
+[![License: MIT](https://img.shields.io/badge/license-MIT-56BF4F?style=flat-square&labelColor=1E281F)](LICENSE)
+[![Dataset: MILU](https://img.shields.io/badge/data-MILU%20(CC%20BY%204.0)-FFD21E?style=flat-square&labelColor=1E281F)](https://huggingface.co/datasets/ai4bharat/MILU)
+[![Report](https://img.shields.io/badge/report-sthanika.ai-56BF4F?style=flat-square&labelColor=1E281F&logo=firefox&logoColor=white)](https://sthanika.ai/research/milu-2026)
 
-**MILU is AI4Bharat and IBM's benchmark. We run it as adopters, not authors.** This repo's
-contribution is: coverage of newer models (2025-2026 checkpoints the original paper
-predates), a compute-efficiency lens the original paper doesn't report, and whatever findings
-fall out of that — complementary to AI4Bharat/IBM's work, not competitive with it. See
-[Credit](#credit) below.
+## What it measures
 
-**What's novel here, beyond re-running the paper's own models:** a reusable evaluation
-pipeline (model-major scheduling, a raw-output store fully decoupled from scoring, a
-queryable results DB); real, disclosed discovery and correction of a scoring-protocol bug
-that silently breaks four different hybrid-"thinking" model families (see
-[Thinking/reasoning configuration](#8-thinkingreasoning-configuration) below) — a bug that,
-uncorrected, would have inverted two models' rank in the league table; a genuine
-thinking-on-vs-off head-to-head for one model (Qwen3.6-27B) showing a 16.84-point swing from
-that single setting alone; and measured GPU-hours alongside every accuracy number, so the
-accuracy-per-unit-of-compute tradeoff is visible rather than accuracy in isolation.
+MILU is about 85,000 multiple-choice questions across 8 domains and 41 subjects in 11 Indic languages, drawn from Indian regional and state exams (NAACL 2025). The original paper evaluated 42+ LLMs current as of late 2024, with a top score (GPT-4o) of about 74%. This repo runs it as an adopter, not an author, and adds:
 
-## 1. Results
+- **Newer models:** 2025–2026 checkpoints the paper predates, 18 models across all 11 languages.
+- **A compute lens:** wall-clock GPU-hours alongside every accuracy number, so the accuracy-per-compute tradeoff is visible.
+- **A scoring-protocol finding:** a bug that silently breaks four hybrid "thinking" model families under the standard loglikelihood protocol and, uncorrected, would have inverted two models' ranks.
+- **A thinking on/off head-to-head:** Qwen3.6-27B shows a 16.84-point swing from that one setting alone.
+- **A reusable pipeline:** model-major scheduling, a raw-output store fully decoupled from scoring, and a queryable results DB.
 
-Overall accuracy plus measured compute, for the models fully evaluated so far. Compute is
-wall-clock GPU-hours on privately provisioned, shared hardware; API-served models are marked
-as such, since no GPU-hours are attributable to them.
+Every reported figure traces back to a raw model output through this pipeline. Report: [sthanika.ai](https://sthanika.ai/research/milu-2026)
 
-| Rank | Model | Protocol | Overall | Compute | Note |
+## Quickstart
+
+Local models need no API key, but the MILU dataset and several checkpoints (Gemma and others) are gated on Hugging Face. Request access to `ai4bharat/MILU` first (it can take time), then authenticate with `huggingface-cli login` or `export HF_TOKEN=...`.
+
+```bash
+git clone https://github.com/sthanika-ai/milu-llm-evaluation.git
+cd milu-llm-evaluation
+bash scripts/setup_vendor.sh          # clones + patches vendor/MILU, clones + builds vendor/llama.cpp
+cp .env.example .env                  # fill in the keys your target model needs
+
+python3.12 -m venv .venv-multimodal
+source .venv-multimodal/bin/activate
+pip install -r requirements/multimodal.freeze.txt
+pip install mlflow tiktoken           # gap in the lock files, see requirements/README.md
+
+# sanity gate first: expect ~28-29% on Gujarati, within about a point of the paper's 29.25%
+python -m pipeline.run --models gemma-2-2b-it
+
+python -m pipeline.run --models gemma-3-27b-it     # one model, all 11 languages
+python -m pipeline.run                             # every config in configs/models/
+python scripts/export_results_tables.py            # CSV summary of everything you've run
+```
+
+Notes:
+
+- **Five venvs.** Different model backends need separate venvs. This is real complexity (see `requirements/README.md`), not something to collapse into one `requirements.txt`. Set up only the venv(s) your target model needs.
+- **What `pipeline.run` does.** For each matching config in `configs/models/*.yaml`, it invokes the vendored `lm_eval` CLI under that config's venv, normalises the output (`pipeline/store.py`), scores it (`pipeline/scorer.py`), and writes `results/results.db` plus an MLflow run. `bash scripts/run_evaluation.sh --models <id>` is an equivalent wrapper.
+- **Extra steps for some rows.** Sarvam-M (thinkmode), Sarvam-30B and gpt-oss-20b (thinkmode) needed targeted-retry and replication steps beyond this one command to reach their reported numbers. Those auxiliary scripts are not in the initial commit.
+- **Configs.** `configs/models/*.yaml` has 19 curated configs (checkpoint, revision, backend, generation config), the 18 roster models plus the `gemma-2-2b-it` sanity gate. Each model's own `notes:` field documents quantization, protocol rationale and any library patches. See `configs/README.md` for the schema.
+- **Not published.** The project's full investigation history (53 configs: smoke tests, staging runs, superseded pre-bugfix rows) is not published. The generated artifacts (`data_raw_outputs/`, `results/results.db`, `mlruns/`) are gitignored and machine-local, so only the code that produces them is included.
+
+## Results
+
+Overall accuracy plus measured compute. Compute is wall-clock GPU-hours on privately provisioned, shared hardware, and API models are marked as such.
+
+| rank | model | protocol | overall | compute | note |
 |---|---|---|---|---|---|
-| 1 | Qwen3.8-Max (API) | generative, 0-shot (API) | **89.67%** | API (hosted) | highest accuracy in the roster; reasoning is mandatory on this endpoint (can't be disabled), so its compute profile isn't directly comparable to fully-disabled-reasoning rows — see that config's `notes:` field |
-| 2 | Qwen3.6-27B (thinking on, llama.cpp GGUF) | generative, 0-shot | 83.84% | 74.90 GPU-hr | +16.84 points over the thinking-off row below, from that setting alone — see §8 below |
-| 3 | Sarvam-M 24B (thinkmode) | generative, 0-shot | 82.44% | 19.42 GPU-hr | corrected row, see §8 below |
-| 4 | DeepSeek V4-Flash | generative, 0-shot (API) | 79.51% | API (hosted) | complete, 0% malformed |
-| 5 | Sarvam-30B (llama.cpp GGUF) | generative, 0-shot | 72.99% | 76.60 GPU-hr | most compute-intensive model in the roster |
-| 6 | gpt-oss-20b (thinkmode, vLLM) | generative, 0-shot | 72.22% | 9.15 GPU-hr | corrected row, see §8 below |
-| 7 | Qwen3.6-27B (thinking off) | generative, 0-shot | 67.00% | 3.79 GPU-hr | corrected row, see §8 below |
+| 1 | Qwen3.8-Max (API) | generative, 0-shot (API) | 89.67% | API (hosted) | reasoning is mandatory on this endpoint, so compute is not comparable to fully-disabled-reasoning rows |
+| 2 | Qwen3.6-27B (thinking on, llama.cpp GGUF) | generative, 0-shot | 83.84% | 74.90 GPU-hr | +16.84 points over thinking off |
+| 3 | Sarvam-M 24B (thinkmode) | generative, 0-shot | 82.44% | 19.42 GPU-hr | corrected row |
+| 4 | DeepSeek V4-Flash | generative, 0-shot (API) | 79.51% | API (hosted) | 0% malformed |
+| 5 | Sarvam-30B (llama.cpp GGUF) | generative, 0-shot | 72.99% | 76.60 GPU-hr | most compute-intensive in the roster |
+| 6 | gpt-oss-20b (thinkmode, vLLM) | generative, 0-shot | 72.22% | 9.15 GPU-hr | corrected row |
+| 7 | Qwen3.6-27B (thinking off) | generative, 0-shot | 67.00% | 3.79 GPU-hr | corrected row |
 | 8 | Mistral Small 3.1 24B | generative, 0-shot | 64.04% | 0.74 GPU-hr | |
 | 9 | Gemma 3 27B | loglikelihood, 5-shot | 63.95% | 13.25 GPU-hr | |
-| 10 | Llama 4 Scout (17B active/109B total MoE) | loglikelihood, 5-shot | 63.06% | 22.00 GPU-hr | |
+| 10 | Llama 4 Scout (17B active / 109B MoE) | loglikelihood, 5-shot | 63.06% | 22.00 GPU-hr | |
 | 11 | Gemma 4 12B | loglikelihood, 5-shot | 61.12% | 7.18 GPU-hr | |
 | 12 | Gemma 3 12B | loglikelihood, 5-shot | 56.41% | 6.71 GPU-hr | |
 | 13 | Gemma 3 12B INT4 | loglikelihood, 5-shot | 53.94% | 6.48 GPU-hr | |
-| 14 | Qwen3-VL 8B Instruct | loglikelihood, 5-shot | 50.33% | 8.72 GPU-hr | multimodal architecture, text-only used |
+| 14 | Qwen3-VL 8B Instruct | loglikelihood, 5-shot | 50.33% | 8.72 GPU-hr | multimodal architecture, text only used |
 | 15 | Phi-4 14B | loglikelihood, 5-shot | 47.55% | 14.59 GPU-hr | |
 | 16 | Gemma 3 4B | loglikelihood, 5-shot | 43.03% | 2.51 GPU-hr | |
 | 17 | Qwen2.5 7B Instruct | loglikelihood, 5-shot | 41.81% | 7.92 GPU-hr | |
 | 18 | Sarvam-1 2B | loglikelihood, 5-shot | 28.63% | 1.47 GPU-hr | |
 
-Also in `configs/models/` but not in the table above: `gemma-2-2b-it` (a sanity-gate spot
-check against the paper's own published number, not a full roster row — see §7). 11
-frontier-model reference points (Claude/GPT/Gemini, cited from vendor system cards, **not run
-by us**) round out the fuller internal comparison but aren't reproduced here.
+**The thinking-mode finding.** Four model families have chat templates that can silently enable "thinking", which breaks standard loglikelihood MCQ scoring (it measures how likely the model is to jump from an empty `<think>` tag straight to an answer, a distribution it was never trained to produce). Uncorrected, it hid two of the strongest models near the bottom of the table.
 
-Regenerate a machine-readable version of this table yourself after running the pipeline via
-`python scripts/export_results_tables.py` (see §9) — the underlying `results/results.db` and
-its CSV exports aren't included in this repo.
-
-## 2. Models evaluated
-
-19 curated, published configs in `configs/models/` — one canonical, full-11-language,
-preferred-method config per model with a row in the table above, plus the sanity-gate config
-— spanning local open-weight models (Gemma 2/3/4, Qwen 2.5/3.6, Sarvam-1/M/30B, Llama,
-Mistral Small 3.1, Phi-4, gpt-oss-20b, Qwen3-VL) and two API models (DeepSeek V4-Flash,
-Qwen3.8-Max) evaluated end-to-end. Qwen3.6-27B has two of those configs, not one — thinking
-forced off and thinking left on are both genuine, disclosed configurations with materially
-different results (§8), so both are published rather than picking one. This project's own full
-investigation history (53 configs — smoke tests, staging runs, superseded pre-bugfix rows)
-isn't published; see
-`configs/README.md`'s "Published vs. full local registry" section for exactly what's excluded
-and why. Checkpoint revision, quantization, protocol rationale, and any library patches a
-given model needed are documented in that model's own config `notes:` field — see
-`configs/README.md` for the schema.
-
-## 3. Repository structure
-
-```
-configs/models/*.yaml   19 curated, published model configs (checkpoint, revision, backend, generation config)
-configs/README.md       config schema + naming conventions
-pipeline/                evaluation pipeline: registry, scheduler, raw-output store, scorer,
-                          results DB, MLflow logging, cost-estimation utilities
-patches/                 vendor/MILU's local modifications, captured for reproducibility
-requirements/            per-venv pip-freeze snapshots + the 5-venv strategy writeup
-scripts/                 setup_vendor.sh, run_evaluation.sh, export_results_tables.py
-tests/                   unit tests for pipeline/scorer.py and pipeline/registry.py
-```
-
-`vendor/MILU` and `vendor/llama.cpp` (third-party, cloned by `scripts/setup_vendor.sh`, not
-committed) and `data_raw_outputs/`, `mlruns/`, `results/results.db`, `.venv*` (this project's
-own large, regeneratable, or machine-specific artifacts, gitignored) exist locally but aren't
-part of the published repo — see [Known limitations](#10-known-limitations).
-
-## 4. Installation
-
-```bash
-git clone <this-repo-url>
-cd milu-llm-evaluation
-bash scripts/setup_vendor.sh          # clones + patches vendor/MILU, clones + builds vendor/llama.cpp
-
-python3.12 -m venv .venv-multimodal
-source .venv-multimodal/bin/activate
-pip install -r requirements/multimodal.freeze.txt
-pip install mlflow tiktoken           # gap in the lock files -- see requirements/README.md
-```
-
-This project needs **five separate venvs** for different model backends — this is real,
-load-bearing complexity (see `requirements/README.md`), not something to collapse into one
-`requirements.txt`. Set up only the venv(s) your target model needs.
-
-## 5. Configuration
-
-```bash
-cp .env.example .env
-# fill in whichever of these you need -- see .env.example's comments for which model uses which
-```
-
-Local/open-weight models need no API key, but several checkpoints (Gemma, etc.) and the MILU
-dataset itself are **gated on Hugging Face**. Request access to
-[`ai4bharat/MILU`](https://huggingface.co/datasets/ai4bharat/MILU) (can take time — do this
-first) and to any gated checkpoint you plan to run, then authenticate locally with
-`huggingface-cli login` or `export HF_TOKEN=...` — this project relies on `huggingface_hub`'s
-standard authentication, not a custom token variable.
-
-## 6. Running an evaluation
-
-```bash
-python -m pipeline.run --models gemma-2-2b-it --limit 20   # smoke test
-python -m pipeline.run --models gemma-3-27b-it              # one model, all 11 languages
-python -m pipeline.run                                      # every config in configs/models/
-```
-
-or the equivalent wrapper: `bash scripts/run_evaluation.sh --models gemma-2-2b-it`.
-
-`pipeline/run.py` loads all matching configs from `configs/models/*.yaml`, and for each one:
-invokes the vendored `lm_eval` CLI as a subprocess under that config's `venv:` environment,
-normalizes the output (`pipeline/store.py`), scores it (`pipeline/scorer.py`), and writes rows
-into `results/results.db` (`pipeline/results_db.py`) plus an MLflow run
-(`pipeline/mlflow_logging.py`). Note that the top few rows in §1 (Sarvam-M thinkmode,
-Sarvam-30B, gpt-oss-20b thinkmode) needed additional targeted-retry/replication steps beyond
-this one command to reach their final reported numbers — those auxiliary scripts aren't
-included in this initial commit.
-
-## 7. Reproducing results
-
-1. `bash scripts/setup_vendor.sh`
-2. Set up the venv(s) you need (§4 above), request MILU dataset access, configure `.env` (§5).
-3. **Run the sanity gate first**: `python -m pipeline.run --models gemma-2-2b-it`. Expect
-   ~28-29% on Gujarati, within about a point of the MILU paper's own published 29.25% for
-   this checkpoint. Don't trust anything else until this passes.
-4. Run your target model(s): `python -m pipeline.run --models <model_id>`.
-5. `python scripts/export_results_tables.py` to get a CSV summary of everything you've run.
-
-## 8. Thinking/reasoning configuration
-
-Four model families in this roster have chat templates that can silently enable a "thinking"
-mode, which — if not accounted for — breaks the standard loglikelihood MCQ-scoring protocol
-entirely (measuring "how likely is the model to jump from an empty `<think>` tag straight to
-an answer," a distribution the model was never trained to produce). This is the single most
-consequential methodology finding in this project: uncorrected, it hid two of the strongest
-models in the roster at the bottom of the table (Sarvam-M and gpt-oss-20b scored 48.02% and
-30.45% under naive loglikelihood — bottom-half — vs. 82.44% and 72.22% corrected — now #3 and
-#6 of the roster).
-
-A fifth row below isn't a scoring-protocol correction at all: Qwen3.6-27B is the one model in
-this roster evaluated with thinking **both** on and off, as two separate, equally-valid
-production configs. The 16.84-point gap between them is a genuine capability difference, not a
-bug — see `configs/models/qwen3.6-27b-llamacpp-gguf.yaml`'s own `notes:` field.
-
-| Model | Thinking enabled | Reasoning config | Effect |
+| model | thinking | reasoning config | effect |
 |---|---|---|---|
-| Sarvam-M 24B | Yes, exercised | 0-shot generative, `max_new_tokens≈1536`, temperature 0 | 48.02% (broken) → **82.44%** (reported) |
-| Qwen3.6-27B (thinking off) | No, forced off | `enable_thinking=False` patch + 0-shot generative | 37.82% (broken) → **67.00%** (reported) |
-| Qwen3.6-27B (thinking on) | Yes, uncapped | 0-shot generative via llama.cpp GGUF, no stop sequence, `max_gen_toks=3072`, no reasoning-budget cap | **83.84%** (reported); +16.84 points over the thinking-off row, from that one setting |
-| gpt-oss-20b | Yes (Harmony format) | 0-shot generative, no stop sequence, `max_gen_toks=8192` after malformed-item retry | 30.45% (broken, smoke-scale) → **72.22%** (reported) |
-| Sarvam-30B | Yes, budget-capped | `llama.cpp --reasoning-budget` hard cap on the thinking phase | **72.99%** (reported) |
-| Qwen3.8-Max | Yes, mandatory (can't be disabled) | `openrouter_reasoning_effort: minimal` — the lowest allocation the endpoint accepts, not a true disable | **89.67%** (reported); mandatory reasoning tokens on every call mean its compute profile isn't directly comparable to fully-disabled-reasoning rows |
+| Sarvam-M 24B | yes | 0-shot generative, `max_new_tokens`≈1536, temperature 0 | 48.02% (broken) → 82.44% |
+| Qwen3.6-27B (off) | forced off | `enable_thinking=False` patch + 0-shot generative | 37.82% (broken) → 67.00% |
+| Qwen3.6-27B (on) | yes, uncapped | 0-shot generative via llama.cpp GGUF, `max_gen_toks=3072`, no budget cap | 83.84% (+16.84 over off) |
+| gpt-oss-20b | yes (Harmony) | 0-shot generative, `max_gen_toks=8192` after malformed-item retry | 30.45% (broken, smoke-scale) → 72.22% |
+| Sarvam-30B | yes, budget-capped | llama.cpp `--reasoning-budget` hard cap | 72.99% |
+| Qwen3.8-Max | yes, mandatory | `openrouter_reasoning_effort: minimal`, the lowest the endpoint accepts | 89.67% |
 
-"Visible/final output handling" here means: extract the model's own stated final answer via a
-regex filter, score only that — no hidden chain-of-thought is inspected beyond what each model
-itself returned in its own output stream. Per-model detail (exact token budgets, why each
-protocol was chosen, any library patch involved) is in that model's own config `notes:` field
-in `configs/models/`.
+Only each model's own stated final answer is extracted (regex filter) and scored. The Qwen3.6-27B gap is a genuine capability difference, not a bug.
 
-## 9. Results and analysis
+Caveats:
 
-Running the pipeline yourself (§6/§7) produces:
-- **`results/results.db`** (gitignored, machine-local) — the queryable results layer, one row
-  per (run, breakdown_type, breakdown_key). See `pipeline/results_db.py`'s schema.
-- **`data_raw_outputs/<model_id>/<run_timestamp>/raw_items.jsonl`** (gitignored, machine-local)
-  — verbatim per-item model output, prompt hash, and generation config. Scoring is a fully
-  separate offline pass over this store (`pipeline/scorer.py`) — never welded to inference —
-  so any number can be re-derived or disputed without re-running the model.
-- **`python scripts/export_results_tables.py`** — exports `results/results.db` into
-  `results/tables/league_table.csv`, `by_language.csv`, `by_domain.csv` for anything readable
-  outside SQLite.
+- Frontier APIs (GPT, Gemini, Claude) are cited from vendor system cards, not run here.
+- The default venv's installed `transformers` (5.14.1) does not match the version its lock file pins and the sanity gate was validated against (4.46.3). Most loglikelihood rows ran under it and have not yet been re-verified. See `requirements/README.md`.
+- GPU-hours are indicative, not a controlled benchmark.
+- API results reflect real responses at run time. Provider-side updates are not pinned, so an access date substitutes for a revision hash. DeepSeek V4-Flash needed an explicit dispatch-rate limiter.
+- Hardware was 2× NVIDIA A100 80GB PCIe. Smaller GPUs can run the smaller models but not the 24B+ ones at full precision.
+- Several bugs were found and fixed (a tokenizer round-trip bug, a silent RoPE-base truncation, a mass-timeout harness bug, a first-vs-last-match regex extraction bug). Each is disclosed in the relevant config's `notes:` field and in `patches/README.md`.
 
-None of these generated artifacts are included in this repo — only the code that produces
-them.
+Full report: [sthanika.ai](https://sthanika.ai/research/milu-2026)
 
-## 10. Known limitations
+## Citation
 
-- **Frontier APIs (GPT, Gemini, Claude) are cited, not run by this project.** The figures for
-  those models come from each vendor's own published system card, not from an evaluation run
-  in this repository.
-- **`transformers` version drift, unresolved.** The default venv's actual installed
-  `transformers` (`5.14.1`) doesn't match the version its own lock file pins and the sanity
-  gate was validated against (`4.46.3`) — most loglikelihood-protocol rows ran under this
-  venv. Not yet re-verified against the sanity gate. See `requirements/README.md`.
-- **GPU-hours are indicative, not a controlled benchmark.** Compute figures are wall-clock
-  hours measured on privately provisioned, shared hardware — not a like-for-like throughput
-  measurement, and not attributable for API-served models.
-- **API/provider non-determinism.** DeepSeek V4-Flash's numbers reflect real API responses at
-  the time of the run; provider-side model updates aren't pinned by us the way local
-  checkpoints are (an access date substitutes for a revision hash).
-- **Rate limits are real and provider-specific.** DeepSeek V4-Flash needed an explicit
-  dispatch-rate limiter beyond `num_concurrent`.
-- **The MILU dataset must be obtained separately** (HF-gated, distributed under CC BY 4.0 by
-  AI4Bharat/IBM) — not bundled in this repo.
-- **Hardware**: this project ran on 2× NVIDIA A100 80GB PCIe. Smaller GPUs can run the
-  smaller models in the roster but not the 24B+ ones at full precision — see
-  `requirements/README.md`.
-- **Several real scoring/infrastructure bugs were found and fixed during this project**
-  (a tokenizer round-trip bug, a silent RoPE-base truncation bug, a mass-timeout harness bug,
-  a first-vs-last-match regex extraction bug) — each is disclosed in the relevant model
-  config's own `notes:` field and in `patches/README.md`, not silently patched over.
-
-## 11. Citation
-
-If you use this pipeline, its configs, or its results, please cite this repository (see
-`CITATION.cff`). **If you use the MILU benchmark itself, cite the original paper:**
+Cite this repository as in [`CITATION.cff`](CITATION.cff). If you use the MILU benchmark itself, cite the original paper:
 
 ```bibtex
 @inproceedings{verma-etal-2025-milu,
@@ -252,22 +117,14 @@ If you use this pipeline, its configs, or its results, please cite this reposito
 }
 ```
 
-## Credit
-
-MILU is [AI4Bharat](https://ai4bharat.iitm.ac.in/) and IBM's benchmark, published at NAACL
-2025 ([arXiv:2411.02538](https://arxiv.org/abs/2411.02538), code at
-[github.com/AI4Bharat/MILU](https://github.com/AI4Bharat/MILU)). This repository runs their
-benchmark as adopters — full credit to AI4Bharat and IBM for the dataset, task design, and
-original evaluation. This project's own contribution is coverage of newer models, a
-compute-efficiency lens, and whatever findings fall out of that; it's complementary to their work,
-not competitive with it. The evaluation harness is EleutherAI's
-[lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness), via AI4Bharat's
-fork.
-
 ## License
 
-This project's own code, configs, scripts, and docs are MIT-licensed — see `LICENSE`.
-Vendored dependencies (`vendor/MILU`, `vendor/llama.cpp`, cloned by `scripts/setup_vendor.sh`,
-not committed) remain under their own upstream MIT licenses — see `patches/README.md`. The
-MILU dataset is distributed separately by AI4Bharat/IBM under CC BY 4.0 and is not bundled in
-this repo; request access on Hugging Face (§5).
+Code, configs, scripts and docs are MIT, see [LICENSE](LICENSE). Vendored dependencies (`vendor/MILU`, `vendor/llama.cpp`, cloned by `scripts/setup_vendor.sh`, not committed) keep their upstream MIT licenses, see `patches/README.md`. The MILU dataset is distributed separately by AI4Bharat/IBM under CC BY 4.0 and is not bundled.
+
+## Related
+
+- [MILU](https://github.com/AI4Bharat/MILU) (AI4Bharat and IBM, NAACL 2025, [arXiv:2411.02538](https://arxiv.org/abs/2411.02538)): the benchmark. Full credit to AI4Bharat and IBM for the dataset, task design and original evaluation. This repo is complementary to their work, not competitive with it.
+- [`ai4bharat/MILU`](https://huggingface.co/datasets/ai4bharat/MILU): the dataset (gated)
+- EleutherAI's lm-evaluation-harness, via AI4Bharat's fork: the evaluation harness
+- Companion work from sthanika-ai: [CodeMixTax](https://github.com/sthanika-ai/CodeMixTax), [token_fertility](https://github.com/sthanika-ai/token_fertility)
+- Site: [sthanika.ai](https://sthanika.ai)
